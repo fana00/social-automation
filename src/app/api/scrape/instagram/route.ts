@@ -13,47 +13,65 @@ async function uploadToCloudinary(
   url: string,
   folder: string,
   resourceType: "image" | "video" = "image"
-): Promise<string> {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    },
-  });
-  if (!res.ok) return url;
+): Promise<string | null> {
+  // Try direct Cloudinary upload first (Cloudinary's servers can sometimes fetch IG CDN)
+  try {
+    const direct = await new Promise<{ secure_url: string }>((resolve, reject) => {
+      cloudinary.uploader.upload(
+        url,
+        { folder, resource_type: resourceType },
+        (err, r) => (err ? reject(err) : resolve(r as { secure_url: string }))
+      );
+    });
+    return direct.secure_url;
+  } catch {
+    // Fall through to manual fetch + stream upload
+  }
 
-  const buffer = Buffer.from(await res.arrayBuffer());
-  const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      { folder, resource_type: resourceType },
-      (err, r) => (err ? reject(err) : resolve(r as { secure_url: string }))
-    );
-    stream.end(buffer);
-  });
-  return result.secure_url;
+  // Fallback: fetch via our server, then stream to Cloudinary
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+      },
+    });
+    if (!res.ok) {
+      console.error(`[scrape] Failed to fetch ${url.substring(0, 60)}: ${res.status}`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder, resource_type: resourceType },
+        (err, r) => (err ? reject(err) : resolve(r as { secure_url: string }))
+      );
+      stream.end(buffer);
+    });
+    return result.secure_url;
+  } catch (e) {
+    console.error(`[scrape] Upload failed for ${url.substring(0, 60)}:`, e instanceof Error ? e.message : e);
+    return null;
+  }
 }
 
 async function uploadPostMedia(
   post: ScrapedPost,
   personaId: string
-): Promise<{ thumbnailUrl: string; mediaUrls: string[] }> {
+): Promise<{ thumbnailUrl: string; mediaUrls: string[] } | null> {
   const folder = `fana/scraped/${personaId}`;
 
-  const thumbnailUrl = await uploadToCloudinary(
-    post.imageUrl,
-    folder,
-    "image"
-  ).catch(() => post.imageUrl);
+  const thumbnailUrl = await uploadToCloudinary(post.imageUrl, folder, "image");
+  if (!thumbnailUrl) return null;
 
   const mediaUrls: string[] = [];
   for (const url of post.mediaUrls) {
-    try {
-      const resourceType = post.type === "video" ? "video" : "image";
-      const uploaded = await uploadToCloudinary(url, folder, resourceType);
-      mediaUrls.push(uploaded);
-    } catch {
-      mediaUrls.push(url);
-    }
+    const resourceType = post.type === "video" ? "video" : "image";
+    const uploaded = await uploadToCloudinary(url, folder, resourceType);
+    if (!uploaded) return null;
+    mediaUrls.push(uploaded);
   }
 
   return { thumbnailUrl, mediaUrls };
@@ -106,15 +124,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ posts: [], newCount: 0 });
     }
 
-    // Upload new posts to Cloudinary and persist
+    // Upload new posts to Cloudinary and persist (skip posts where any media fails)
     const postEntries = [];
+    let skippedCount = 0;
     for (const post of newPosts) {
-      const { thumbnailUrl, mediaUrls } = await uploadPostMedia(post, personaId);
+      const uploaded = await uploadPostMedia(post, personaId);
+      if (!uploaded) {
+        skippedCount++;
+        continue;
+      }
       postEntries.push({
         sourceUrl: profileUrl,
         personaId,
-        thumbnailUrl,
-        mediaUrls,
+        thumbnailUrl: uploaded.thumbnailUrl,
+        mediaUrls: uploaded.mediaUrls,
         caption: post.caption,
         type: post.type as "image" | "video" | "carousel",
         likes: post.likes,
@@ -122,7 +145,12 @@ export async function POST(req: NextRequest) {
         used: false,
       });
     }
-    await appendScrapedPosts(postEntries);
+    if (postEntries.length > 0) {
+      await appendScrapedPosts(postEntries);
+    }
+    if (skippedCount > 0) {
+      console.warn(`[scrape] Skipped ${skippedCount} posts due to media upload failures`);
+    }
 
     // Update Last Scraped timestamp and count in IG Sources tab
     const igSource = await getIGSourceByUrl(profileUrl);
