@@ -285,10 +285,17 @@ export default function GalleryPage() {
         body: JSON.stringify({
           calendarRowId: scheduleModal.item.calendarRowId,
           accountId: selectedAccountId,
+          persona: scheduleModal.item.persona,
           caption: scheduleModal.caption,
           hashtags: scheduleModal.hashtags,
           mediaUrls: scheduleModal.item.images,
           platform: account?.platform || "instagram",
+          contentType:
+            scheduleModal.item.type === "carousel"
+              ? "carousel"
+              : scheduleModal.item.type === "video"
+                ? "video"
+                : "image",
           useNextFreeSlot: scheduleMode === "next_slot",
         }),
       });

@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { schedulePost } from "@/lib/blotato";
+import { schedulePost, getAccounts } from "@/lib/blotato";
 import { updateCalendarEntry } from "@/lib/sheets";
+import { notifyScheduled } from "@/lib/discord";
 
 export async function POST(req: NextRequest) {
   try {
     const {
       calendarRowId,
       accountId,
+      persona,
       caption,
       hashtags,
       mediaUrls,
       platform,
+      contentType,
       scheduledTime,
       useNextFreeSlot,
     } = await req.json();
@@ -38,6 +41,34 @@ export async function POST(req: NextRequest) {
         status: "scheduled",
         blotatoPostId: postId,
       });
+    }
+
+    // Send Discord notification (don't block publish if it fails)
+    try {
+      // Look up the account username so the notification shows @handle
+      let accountName = accountId;
+      try {
+        const accounts = await getAccounts();
+        const match = accounts.find((a) => a.id === accountId);
+        if (match) accountName = match.username;
+      } catch {
+        // ignore — fall back to accountId
+      }
+
+      await notifyScheduled({
+        persona: persona || "unknown",
+        account: accountName,
+        platform: platform || "instagram",
+        caption: caption || "",
+        hashtags: hashtags || "",
+        mediaUrls: mediaUrls || [],
+        contentType:
+          (contentType as "image" | "carousel" | "video") ||
+          (mediaUrls?.length > 1 ? "carousel" : "image"),
+        scheduledFor: scheduledTime || (useNextFreeSlot ? "next free slot" : "now"),
+      });
+    } catch (notifyErr) {
+      console.error("[publish] Discord notification failed:", notifyErr);
     }
 
     return NextResponse.json({ postId });
