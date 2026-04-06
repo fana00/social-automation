@@ -37,7 +37,7 @@ AI 기반 소셜 미디어 콘텐츠 자동화 플랫폼. 인스타그램 레퍼
 
 - **프론트엔드**: Next.js 16 (App Router) + Tailwind CSS
 - **데이터베이스**: Google Sheets (6개 탭: Personas, Content Calendar, Generation Log, QC Trials, IG Sources, Scraped Posts)
-- **이미지/영상 생성**: [kie.ai](https://kie.ai) (Seedream 4.5, Kling 3.0)
+- **이미지/영상 생성**: [kie.ai](https://kie.ai) , [fal.ai](https://fal.ai) (Seedream 4.5, Kling 3.0)
 - **LLM**: [OpenRouter](https://openrouter.ai) (Grok 4 Fast - 비전 + 텍스트)
 - **미디어 저장소**: [Cloudinary](https://cloudinary.com)
 - **IG 스크래핑**: [Apify](https://apify.com)
