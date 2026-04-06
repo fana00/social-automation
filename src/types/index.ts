@@ -80,7 +80,7 @@ export interface QCTrial {
 // ==================== IG Sources ====================
 export interface IGSource {
   profileUrl: string;
-  personaId: string;
+  personaIds: string[];
   lastScraped: string;
   postsScraped: number;
   active: boolean;

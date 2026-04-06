@@ -58,10 +58,10 @@ async function uploadToCloudinary(
 }
 
 async function uploadPostMedia(
-  post: ScrapedPost,
-  personaId: string
+  post: ScrapedPost
 ): Promise<{ thumbnailUrl: string; mediaUrls: string[] } | null> {
-  const folder = `fana/scraped/${personaId}`;
+  // Shared folder so the same media can be reused across personas without duplication
+  const folder = "fana/scraped/_shared";
 
   const thumbnailUrl = await uploadToCloudinary(post.imageUrl, folder, "image");
   if (!thumbnailUrl) return null;
@@ -88,101 +88,142 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Auto-determine date filter from IG Sources tab
-    let effectiveNewerThan = newerThan;
-    if (!effectiveNewerThan) {
-      const igSource = await getIGSourceByUrl(profileUrl);
-      if (igSource?.source.lastScraped) {
-        // Use last scraped date to only get new posts
-        effectiveNewerThan = igSource.source.lastScraped.split("T")[0];
-      }
+    // Look up the IG Source row to determine which personas this profile feeds
+    const igSource = await getIGSourceByUrl(profileUrl);
+
+    // Resolve the list of personas for fan-out:
+    // - If the source row exists, use its personaIds (multi-persona support)
+    // - Otherwise (manual scrape of new URL), use the personaId from the request
+    const targetPersonas: string[] =
+      igSource?.source.personaIds && igSource.source.personaIds.length > 0
+        ? igSource.source.personaIds
+        : personaId
+          ? [personaId]
+          : [];
+
+    if (targetPersonas.length === 0) {
+      return NextResponse.json(
+        { error: "No persona linked to this profile" },
+        { status: 400 }
+      );
     }
 
+    // Auto-determine date filter from IG Sources tab (last scraped)
+    let effectiveNewerThan = newerThan;
+    if (!effectiveNewerThan && igSource?.source.lastScraped) {
+      effectiveNewerThan = igSource.source.lastScraped.split("T")[0];
+    }
+
+    // Single Apify scrape (regardless of how many personas are linked)
     const posts = await scrapeInstagramProfile(
       profileUrl,
       Math.min(maxPosts, 30),
       effectiveNewerThan
     );
 
-    if (!personaId || posts.length === 0) {
-      return NextResponse.json({ posts, newCount: 0 });
-    }
-
-    // Dedup: compare against existing scraped posts by caption
-    const existingPosts = await getScrapedPosts(personaId);
-    const existingCaptions = new Set(
-      existingPosts.map((p) => p.caption.substring(0, 100))
-    );
-
-    const newPosts = posts.filter(
-      (p) => !existingCaptions.has(p.caption.substring(0, 100))
-    );
-
-    if (newPosts.length === 0) {
-      // Update last scraped even if no new posts
+    if (posts.length === 0) {
       await updateIGSourceLastScraped(profileUrl, new Date().toISOString(), 0);
       return NextResponse.json({ posts: [], newCount: 0 });
     }
 
-    // Upload new posts to Cloudinary and persist (skip posts where any media fails)
-    const postEntries = [];
-    let skippedCount = 0;
-    for (const post of newPosts) {
-      const uploaded = await uploadPostMedia(post, personaId);
+    // Upload media to Cloudinary ONCE per post (shared folder).
+    // Failed uploads are skipped entirely.
+    const uploadedPosts: {
+      post: ScrapedPost;
+      thumbnailUrl: string;
+      mediaUrls: string[];
+    }[] = [];
+    let uploadFailures = 0;
+    for (const post of posts) {
+      const uploaded = await uploadPostMedia(post);
       if (!uploaded) {
-        skippedCount++;
+        uploadFailures++;
         continue;
       }
-      postEntries.push({
-        sourceUrl: profileUrl,
-        personaId,
-        thumbnailUrl: uploaded.thumbnailUrl,
-        mediaUrls: uploaded.mediaUrls,
-        caption: post.caption,
-        type: post.type as "image" | "video" | "carousel",
-        likes: post.likes,
-        scrapedAt: new Date().toISOString(),
-        used: false,
-      });
-    }
-    if (postEntries.length > 0) {
-      await appendScrapedPosts(postEntries);
-    }
-    if (skippedCount > 0) {
-      console.warn(`[scrape] Skipped ${skippedCount} posts due to media upload failures`);
+      uploadedPosts.push({ post, ...uploaded });
     }
 
-    // Update Last Scraped timestamp and count in IG Sources tab
-    const igSource = await getIGSourceByUrl(profileUrl);
+    // Fan out to each linked persona: dedup per-persona, append rows
+    let totalNewCount = 0;
+    let totalSkippedCount = 0;
+    const requestPersonaEntries: typeof uploadedPosts = [];
+
+    for (const targetPersona of targetPersonas) {
+      const existingPosts = await getScrapedPosts(targetPersona);
+      const existingCaptions = new Set(
+        existingPosts.map((p) => p.caption.substring(0, 100))
+      );
+
+      const newForPersona = uploadedPosts.filter(
+        (u) => !existingCaptions.has(u.post.caption.substring(0, 100))
+      );
+
+      if (newForPersona.length === 0) continue;
+
+      const entries = newForPersona.map((u) => ({
+        sourceUrl: profileUrl,
+        personaId: targetPersona,
+        thumbnailUrl: u.thumbnailUrl,
+        mediaUrls: u.mediaUrls,
+        caption: u.post.caption,
+        type: u.post.type as "image" | "video" | "carousel",
+        likes: u.post.likes,
+        scrapedAt: new Date().toISOString(),
+        used: false,
+      }));
+
+      await appendScrapedPosts(entries);
+      totalNewCount += newForPersona.length;
+      totalSkippedCount += uploadedPosts.length - newForPersona.length;
+
+      // Track entries for the persona that initiated the request (for response)
+      if (targetPersona === personaId) {
+        requestPersonaEntries.push(...newForPersona);
+      }
+    }
+
+    if (uploadFailures > 0) {
+      console.warn(
+        `[scrape] Skipped ${uploadFailures} posts due to media upload failures`
+      );
+    }
+
+    // Update Last Scraped on the IG Sources row (or create if missing)
     if (igSource) {
       await updateIGSourceLastScraped(
         profileUrl,
         new Date().toISOString(),
-        newPosts.length
+        uploadedPosts.length
       );
     } else if (personaId) {
-      // Auto-add new source to IG Sources tab
+      // Auto-add new source to IG Sources tab with the requesting persona
       await appendIGSource({
         profileUrl,
-        personaId,
+        personaIds: [personaId],
         lastScraped: new Date().toISOString(),
-        postsScraped: newPosts.length,
+        postsScraped: uploadedPosts.length,
         active: true,
         notes: "Auto-added from scrape",
       });
     }
 
+    // Return the entries for the requesting persona (so the UI shows what they
+    // can act on). If the request didn't specify a persona, fall back to all uploads.
+    const responseEntries =
+      requestPersonaEntries.length > 0 ? requestPersonaEntries : uploadedPosts;
+
     return NextResponse.json({
-      posts: postEntries.map((e) => ({
+      posts: responseEntries.map((e) => ({
         imageUrl: e.thumbnailUrl,
         mediaUrls: e.mediaUrls,
-        caption: e.caption,
-        type: e.type,
-        likes: e.likes,
-        timestamp: e.scrapedAt,
+        caption: e.post.caption,
+        type: e.post.type,
+        likes: e.post.likes,
+        timestamp: new Date().toISOString(),
       })),
-      newCount: newPosts.length,
-      skippedCount: posts.length - newPosts.length,
+      newCount: totalNewCount,
+      skippedCount: totalSkippedCount,
+      personasFanout: targetPersonas,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

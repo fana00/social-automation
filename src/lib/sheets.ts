@@ -327,11 +327,18 @@ export async function getQCTrialsByGenId(genId: string): Promise<QCTrial[]> {
 
 // ==================== IG Sources ====================
 
+function parsePersonaIds(raw: string): string[] {
+  return (raw || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export async function getIGSources(): Promise<IGSource[]> {
   const rows = await readSheet("IG Sources!A2:F");
   return rows.map((r) => ({
     profileUrl: r[0] || "",
-    personaId: r[1] || "",
+    personaIds: parsePersonaIds(r[1] || ""),
     lastScraped: r[2] || "",
     postsScraped: parseInt(r[3] || "0", 10),
     active: r[4] !== "FALSE",
@@ -343,15 +350,15 @@ export async function getIGSourcesByPersona(
   personaId: string
 ): Promise<IGSource[]> {
   const sources = await getIGSources();
-  return sources.filter((s) => s.personaId === personaId && s.active);
+  return sources.filter(
+    (s) => s.personaIds.includes(personaId) && s.active
+  );
 }
 
-export async function appendIGSource(
-  source: IGSource
-): Promise<void> {
+export async function appendIGSource(source: IGSource): Promise<void> {
   await appendRow("IG Sources", [
     source.profileUrl,
-    source.personaId,
+    source.personaIds.join(","),
     source.lastScraped,
     String(source.postsScraped),
     source.active ? "TRUE" : "FALSE",
@@ -369,7 +376,7 @@ export async function getIGSourceByUrl(
   return {
     source: {
       profileUrl: r[0] || "",
-      personaId: r[1] || "",
+      personaIds: parsePersonaIds(r[1] || ""),
       lastScraped: r[2] || "",
       postsScraped: parseInt(r[3] || "0", 10),
       active: r[4] !== "FALSE",
