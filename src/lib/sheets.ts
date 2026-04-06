@@ -341,7 +341,7 @@ export async function getIGSources(): Promise<IGSource[]> {
     personaIds: parsePersonaIds(r[1] || ""),
     lastScraped: r[2] || "",
     postsScraped: parseInt(r[3] || "0", 10),
-    active: r[4] !== "FALSE",
+    active: r[4] === "TRUE",
     notes: r[5] || "",
   }));
 }
@@ -379,7 +379,7 @@ export async function getIGSourceByUrl(
       personaIds: parsePersonaIds(r[1] || ""),
       lastScraped: r[2] || "",
       postsScraped: parseInt(r[3] || "0", 10),
-      active: r[4] !== "FALSE",
+      active: r[4] === "TRUE",
       notes: r[5] || "",
     },
     rowIndex: rowIdx + 2,
