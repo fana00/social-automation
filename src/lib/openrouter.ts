@@ -192,23 +192,37 @@ export async function qualityCheck(
   const response = await chat([
     {
       role: "system",
-      content: `You are an extremely strict quality checker for AI-generated images. You MUST carefully count and verify every anatomical detail.
+      content: `You are an extremely strict quality checker for AI-generated images of a single human subject. You MUST physically count limbs and digits visible in the image, including any partially-visible ones.
 
-MANDATORY CHECKS (fail if ANY are wrong):
-1. ARMS: Count the arms. A human has EXACTLY 2 arms. If you see 3 or more arms, or any extra limb-like shapes, FAIL immediately.
-2. LEGS: Count the legs. A human has EXACTLY 2 legs. If you see 3 or more legs, FAIL immediately.
-3. FINGERS: Each hand should have EXACTLY 5 fingers. Count them carefully. Extra or missing fingers = FAIL.
-4. FACE: Check for distortion, asymmetry, double features (two noses, extra eyes), or uncanny features. Any = FAIL.
-5. BODY MERGING: Check if any body parts are merging into objects, other limbs, or the background. Any merging = FAIL.
-6. ARTIFACTS: Check for stains, smudges, watermarks, or unnatural marks on clothing or skin that shouldn't be there. Any = FAIL.
-7. BODY PROPORTIONS: The character should have a curvy, voluptuous figure with a full bust and slim waist. If the bust appears noticeably small or flat = FAIL.
+COUNTING METHOD:
+- Look at the image carefully. Trace each arm from shoulder to hand. Trace each leg from hip to foot.
+- Count EVERY arm-shaped or hand-shaped object even if it's partially hidden, blurred, or behind another body part.
+- Watch for selfie poses where the arm holding the camera is in addition to the visible arms — if you see 2 arms holding legs AND a 3rd arm holding a phone, that's 3 arms total = FAIL.
+- Watch for limbs that "split" or duplicate in folds of clothing or behind objects.
 
-IMPORTANT: Be EXTREMELY strict. When in doubt, FAIL. It is better to reject a good image than to accept a flawed one.
+MANDATORY CHECKS (fail if ANY violation):
+1. ARM COUNT: A human has EXACTLY 2 arms. Count visible arms including any holding cameras/objects. If total > 2 = FAIL.
+2. LEG COUNT: A human has EXACTLY 2 legs. If visible legs > 2 = FAIL.
+3. HAND COUNT: A human has EXACTLY 2 hands. If visible hands > 2 = FAIL.
+4. FINGER COUNT: Each hand has 5 fingers. Extra/missing/fused fingers = FAIL.
+5. FACE: Distortion, asymmetry, double features = FAIL.
+6. BODY MERGING: Body parts merging into objects/limbs = FAIL.
+7. ARTIFACTS: Stains, smudges, weird marks on clothing/skin = FAIL.
+8. BODY PROPORTIONS: Should have curvy figure with full bust. Flat bust = FAIL.
 
-Count arms and legs OUT LOUD in your analysis before making your decision.
+IMPORTANT: Be EXTREMELY strict. When in doubt, FAIL.
 
-Respond in this exact JSON format:
-{"pass": true/false, "issues": "description of ALL issues found, or empty string if pass"}`,
+You MUST respond in this exact JSON format with explicit counts:
+{
+  "armCount": <number>,
+  "legCount": <number>,
+  "handCount": <number>,
+  "fingerNotes": "<description of finger anomalies if any, else 'normal'>",
+  "pass": <true|false>,
+  "issues": "<description of ALL issues found, or empty string if pass>"
+}
+
+Decision rule: pass MUST be false if armCount != 2, legCount != 2, handCount != 2, or fingerNotes contains anomalies.`,
     },
     {
       role: "user",
@@ -221,7 +235,39 @@ Respond in this exact JSON format:
 
   try {
     const cleaned = response.replace(/```json\n?|\n?```/g, "").trim();
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+
+    // Enforce the counting rules on our side — override pass=true if counts are wrong
+    const armCount = parsed.armCount;
+    const legCount = parsed.legCount;
+    const handCount = parsed.handCount;
+    const fingerNotes = (parsed.fingerNotes || "").toLowerCase();
+
+    const countIssues: string[] = [];
+    if (typeof armCount === "number" && armCount !== 2) {
+      countIssues.push(`${armCount} arms detected (should be 2)`);
+    }
+    if (typeof legCount === "number" && legCount !== 2) {
+      countIssues.push(`${legCount} legs detected (should be 2)`);
+    }
+    if (typeof handCount === "number" && handCount !== 2) {
+      countIssues.push(`${handCount} hands detected (should be 2)`);
+    }
+    if (fingerNotes && fingerNotes !== "normal" && fingerNotes !== "") {
+      countIssues.push(`Fingers: ${parsed.fingerNotes}`);
+    }
+
+    if (countIssues.length > 0) {
+      return {
+        pass: false,
+        issues: [parsed.issues, ...countIssues].filter(Boolean).join("; "),
+      };
+    }
+
+    return {
+      pass: parsed.pass === true,
+      issues: parsed.issues || "",
+    };
   } catch {
     return { pass: true, issues: "" };
   }
