@@ -14,18 +14,21 @@ async function uploadToCloudinary(
   folder: string,
   resourceType: "image" | "video" = "image"
 ): Promise<string | null> {
-  // Try direct Cloudinary upload first (Cloudinary's servers can sometimes fetch IG CDN)
+  // Try direct Cloudinary upload first (Cloudinary fetches the URL itself)
   try {
     const direct = await new Promise<{ secure_url: string }>((resolve, reject) => {
       cloudinary.uploader.upload(
         url,
-        { folder, resource_type: resourceType },
+        { folder, resource_type: resourceType, timeout: 60000 },
         (err, r) => (err ? reject(err) : resolve(r as { secure_url: string }))
       );
     });
     return direct.secure_url;
-  } catch {
-    // Fall through to manual fetch + stream upload
+  } catch (directErr) {
+    console.warn(
+      `[scrape] Cloudinary direct upload failed for ${url.substring(0, 80)}:`,
+      directErr instanceof Error ? directErr.message : directErr
+    );
   }
 
   // Fallback: fetch via our server, then stream to Cloudinary
@@ -33,12 +36,16 @@ async function uploadToCloudinary(
     const res = await fetch(url, {
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
         Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://www.instagram.com/",
       },
     });
     if (!res.ok) {
-      console.error(`[scrape] Failed to fetch ${url.substring(0, 60)}: ${res.status}`);
+      console.error(
+        `[scrape] Server fetch failed for ${url.substring(0, 80)}: ${res.status} ${res.statusText}`
+      );
       return null;
     }
 
@@ -52,7 +59,10 @@ async function uploadToCloudinary(
     });
     return result.secure_url;
   } catch (e) {
-    console.error(`[scrape] Upload failed for ${url.substring(0, 60)}:`, e instanceof Error ? e.message : e);
+    console.error(
+      `[scrape] Upload failed for ${url.substring(0, 80)}:`,
+      e instanceof Error ? e.message : e
+    );
     return null;
   }
 }
