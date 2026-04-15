@@ -71,6 +71,9 @@ export default function GeneratePage() {
   const [contentType, setContentType] = useState<"image" | "carousel" | "video">("image");
   const [carouselCount, setCarouselCount] = useState(4);
   const [referenceVideoUrl, setReferenceVideoUrl] = useState("");
+  const [videoInputMode, setVideoInputMode] = useState<"url" | "upload">("url");
+  const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
 
   // Load saved scraped posts when persona changes
   const loadSavedPosts = useCallback(async () => {
@@ -272,6 +275,7 @@ export default function GeneratePage() {
     setLoading(true);
     try {
       if (contentType === "video") {
+        setVideoError(null);
         const res = await fetch("/api/generate/video", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -282,10 +286,14 @@ export default function GeneratePage() {
           }),
         });
         const data = await res.json();
-        const taskId = data.taskId || data.klingTaskId;
-        const genId = data.genId || data.videoGenId;
-        if (taskId) {
-          setTasks((prev) => [{ taskId, genId }, ...prev]);
+        if (data.error) {
+          setVideoError(data.error);
+        } else {
+          const taskId = data.taskId || data.klingTaskId;
+          const genId = data.genId || data.videoGenId;
+          if (taskId) {
+            setTasks((prev) => [{ taskId, genId }, ...prev]);
+          }
         }
       } else if (contentType === "carousel") {
         const res = await fetch("/api/generate/carousel", {
@@ -592,16 +600,91 @@ export default function GeneratePage() {
           </div>
 
           {contentType === "video" && (
-            <div>
-              <label className="block text-sm text-zinc-400 mb-1">
-                Reference Video URL (IG Reel)
-              </label>
-              <input
-                value={referenceVideoUrl}
-                onChange={(e) => setReferenceVideoUrl(e.target.value)}
-                placeholder="Paste IG reel URL or Cloudinary video URL"
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
-              />
+            <div className="space-y-3">
+              {/* Toggle between URL and Upload */}
+              <div className="flex gap-1 bg-zinc-900 p-1 rounded-lg w-fit">
+                <button
+                  onClick={() => { setVideoInputMode("url"); setVideoError(null); }}
+                  className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                    videoInputMode === "url"
+                      ? "bg-zinc-700 text-white"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Paste Reel URL
+                </button>
+                <button
+                  onClick={() => { setVideoInputMode("upload"); setVideoError(null); }}
+                  className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                    videoInputMode === "upload"
+                      ? "bg-zinc-700 text-white"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Upload Video
+                </button>
+              </div>
+
+              {videoInputMode === "url" ? (
+                <div>
+                  <label className="block text-sm text-zinc-400 mb-1">
+                    IG Reel URL or Video URL
+                  </label>
+                  <input
+                    value={referenceVideoUrl}
+                    onChange={(e) => { setReferenceVideoUrl(e.target.value); setVideoError(null); }}
+                    placeholder="https://www.instagram.com/reel/ABC123/"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm text-zinc-400 mb-1">
+                    Upload Video File
+                  </label>
+                  <input
+                    type="file"
+                    accept="video/mp4,video/quicktime,video/webm"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setUploadingVideo(true);
+                      setVideoError(null);
+                      try {
+                        const formData = new FormData();
+                        formData.append("file", file);
+                        formData.append("upload_preset", "ref-img-upload");
+                        formData.append("resource_type", "video");
+                        const res = await fetch(
+                          `https://api.cloudinary.com/v1_1/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || "dih4auf3w"}/video/upload`,
+                          { method: "POST", body: formData }
+                        );
+                        const data = await res.json();
+                        if (data.secure_url) {
+                          setReferenceVideoUrl(data.secure_url);
+                        } else {
+                          setVideoError("Upload failed. Please try again.");
+                        }
+                      } catch {
+                        setVideoError("Upload failed. Please try again.");
+                      } finally {
+                        setUploadingVideo(false);
+                      }
+                    }}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white file:mr-3 file:bg-zinc-700 file:text-zinc-300 file:border-0 file:rounded file:px-3 file:py-1 file:text-xs"
+                  />
+                  {uploadingVideo && (
+                    <p className="text-xs text-yellow-400 mt-1">Uploading video...</p>
+                  )}
+                  {referenceVideoUrl && videoInputMode === "upload" && (
+                    <p className="text-xs text-green-400 mt-1">Video uploaded successfully</p>
+                  )}
+                </div>
+              )}
+
+              {videoError && (
+                <p className="text-sm text-red-400">{videoError}</p>
+              )}
             </div>
           )}
 

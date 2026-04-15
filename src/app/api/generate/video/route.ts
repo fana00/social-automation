@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runDraftGenerator } from "@/lib/agents/draft-generator";
 import { appendGenerationLog, updateGenerationLog } from "@/lib/sheets";
+import { scrapeInstagramPost } from "@/lib/apify";
 import { v2 as cloudinary } from "cloudinary";
 
 cloudinary.config({
@@ -11,17 +12,30 @@ cloudinary.config({
 
 export async function POST(req: NextRequest) {
   try {
-    const { scrapedVideoUrl, thumbnailUrl, persona, caption } =
+    let { scrapedVideoUrl, thumbnailUrl, persona, caption } =
       await req.json();
-
-    console.log("[video] scrapedVideoUrl:", scrapedVideoUrl);
-    console.log("[video] scrapedVideoUrl length:", scrapedVideoUrl?.length);
 
     if (!scrapedVideoUrl) {
       return NextResponse.json(
         { error: "scrapedVideoUrl is required" },
         { status: 400 }
       );
+    }
+
+    // If user pasted an IG reel/post URL, extract the actual video file URL via Apify
+    if (
+      scrapedVideoUrl.includes("instagram.com/reel/") ||
+      scrapedVideoUrl.includes("instagram.com/p/")
+    ) {
+      try {
+        const postData = await scrapeInstagramPost(scrapedVideoUrl);
+        scrapedVideoUrl = postData.videoUrl;
+        if (!thumbnailUrl) thumbnailUrl = postData.imageUrl;
+        if (!caption) caption = postData.caption;
+      } catch (apifyErr) {
+        const msg = apifyErr instanceof Error ? apifyErr.message : "Failed to extract video from reel URL";
+        return NextResponse.json({ error: msg }, { status: 400 });
+      }
     }
 
     // === STEP 1: Get video on Cloudinary ===
