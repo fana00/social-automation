@@ -192,8 +192,11 @@ export async function POST(req: NextRequest) {
 
     if (qcResult.needsRetry) {
       const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/tasks/callback`;
+      const personaData = await getPersonaById(entry.persona);
       const newTaskId = await createImageTask({
         prompt: qcResult.adjustedPrompt,
+        faceRefUrls: personaData?.faceRefUrls,
+        bodyRefUrls: personaData?.bodyRefUrls,
         callbackUrl,
       });
       await updateGenerationLog(entry.genId, {
