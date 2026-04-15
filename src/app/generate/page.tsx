@@ -68,8 +68,9 @@ export default function GeneratePage() {
   const [prompt, setPrompt] = useState("");
   const [promptImageUrl, setPromptImageUrl] = useState("");
   const [aspectRatio, setAspectRatio] = useState("3:4");
-  const [contentType, setContentType] = useState<"image" | "carousel">("image");
+  const [contentType, setContentType] = useState<"image" | "carousel" | "video">("image");
   const [carouselCount, setCarouselCount] = useState(4);
+  const [referenceVideoUrl, setReferenceVideoUrl] = useState("");
 
   // Load saved scraped posts when persona changes
   const loadSavedPosts = useCallback(async () => {
@@ -264,11 +265,29 @@ export default function GeneratePage() {
   }
 
   async function handleFreeFormGenerate() {
-    if (!prompt || !persona) return;
+    if (!persona) return;
+    if (contentType === "video" && !referenceVideoUrl) return;
+    if (contentType !== "video" && !prompt) return;
 
     setLoading(true);
     try {
-      if (contentType === "carousel") {
+      if (contentType === "video") {
+        const res = await fetch("/api/generate/video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scrapedVideoUrl: referenceVideoUrl,
+            persona,
+            caption: prompt || "",
+          }),
+        });
+        const data = await res.json();
+        const taskId = data.taskId || data.klingTaskId;
+        const genId = data.genId || data.videoGenId;
+        if (taskId) {
+          setTasks((prev) => [{ taskId, genId }, ...prev]);
+        }
+      } else if (contentType === "carousel") {
         const res = await fetch("/api/generate/carousel", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -556,44 +575,68 @@ export default function GeneratePage() {
       {tab === "free-form" && (
         <div className="space-y-4">
           <div>
-            <label className="block text-sm text-zinc-400 mb-1">Prompt</label>
+            <label className="block text-sm text-zinc-400 mb-1">
+              {contentType === "video" ? "Prompt (optional)" : "Prompt"}
+            </label>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the image you want to generate..."
+              placeholder={
+                contentType === "video"
+                  ? "Optional: describe what you want (auto-generated from video reference)"
+                  : "Describe the image you want to generate..."
+              }
               rows={4}
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500 resize-none"
             />
           </div>
 
-          <div>
-            <label className="block text-sm text-zinc-400 mb-1">
-              Reference Image URL (optional)
-            </label>
-            <input
-              value={promptImageUrl}
-              onChange={(e) => setPromptImageUrl(e.target.value)}
-              placeholder="Paste image URL for pose/composition reference"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
-            />
-          </div>
+          {contentType === "video" && (
+            <div>
+              <label className="block text-sm text-zinc-400 mb-1">
+                Reference Video URL (IG Reel)
+              </label>
+              <input
+                value={referenceVideoUrl}
+                onChange={(e) => setReferenceVideoUrl(e.target.value)}
+                placeholder="Paste IG reel URL or Cloudinary video URL"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
+              />
+            </div>
+          )}
+
+          {contentType !== "video" && (
+            <div>
+              <label className="block text-sm text-zinc-400 mb-1">
+                Reference Image URL (optional)
+              </label>
+              <input
+                value={promptImageUrl}
+                onChange={(e) => setPromptImageUrl(e.target.value)}
+                placeholder="Paste image URL for pose/composition reference"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
+              />
+            </div>
+          )}
 
           <div className="flex gap-4">
-            <div className="flex-1">
-              <label className="block text-sm text-zinc-400 mb-1">
-                Aspect Ratio
-              </label>
-              <select
-                value={aspectRatio}
-                onChange={(e) => setAspectRatio(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
-              >
-                <option value="3:4">3:4 (Portrait)</option>
-                <option value="9:16">9:16 (Story/Reel)</option>
-                <option value="1:1">1:1 (Square)</option>
-                <option value="16:9">16:9 (Landscape)</option>
-              </select>
-            </div>
+            {contentType !== "video" && (
+              <div className="flex-1">
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Aspect Ratio
+                </label>
+                <select
+                  value={aspectRatio}
+                  onChange={(e) => setAspectRatio(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
+                >
+                  <option value="3:4">3:4 (Portrait)</option>
+                  <option value="9:16">9:16 (Story/Reel)</option>
+                  <option value="1:1">1:1 (Square)</option>
+                  <option value="16:9">16:9 (Landscape)</option>
+                </select>
+              </div>
+            )}
 
             <div className="flex-1">
               <label className="block text-sm text-zinc-400 mb-1">
@@ -602,12 +645,13 @@ export default function GeneratePage() {
               <select
                 value={contentType}
                 onChange={(e) =>
-                  setContentType(e.target.value as "image" | "carousel")
+                  setContentType(e.target.value as "image" | "carousel" | "video")
                 }
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-500"
               >
                 <option value="image">Single Image</option>
                 <option value="carousel">Carousel</option>
+                <option value="video">Video</option>
               </select>
             </div>
 
@@ -630,7 +674,11 @@ export default function GeneratePage() {
 
           <button
             onClick={handleFreeFormGenerate}
-            disabled={loading || !prompt}
+            disabled={
+              loading ||
+              (contentType === "video" ? !referenceVideoUrl : !prompt) ||
+              !persona
+            }
             className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading ? "Generating..." : "Generate"}
