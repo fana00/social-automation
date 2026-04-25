@@ -49,6 +49,7 @@ export default function GeneratePage() {
   const [igSource, setIgSource] = useState("auto");
   const [igUrl, setIgUrl] = useState("");
   const [maxPosts, setMaxPosts] = useState(15);
+  const [newerThan, setNewerThan] = useState("");
   const [scrapeResult, setScrapeResult] = useState<{ newCount: number; skippedCount: number } | null>(null);
   const [scrapedPosts, setScrapedPosts] = useState<ScrapedPost[]>([]);
   const [selectedPosts, setSelectedPosts] = useState<Set<number>>(new Set());
@@ -100,7 +101,12 @@ export default function GeneratePage() {
     fetch("/api/scrape/instagram", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profileUrl: url, personaId: persona, maxPosts }),
+      body: JSON.stringify({
+        profileUrl: url,
+        personaId: persona,
+        maxPosts,
+        newerThan: newerThan || undefined,
+      }),
     })
       .then((res) => res.json())
       .then((data) => {
@@ -392,7 +398,7 @@ export default function GeneratePage() {
             </div>
           )}
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <label className="text-xs text-zinc-500">크롤링할 포스트 수 Max</label>
               <input
@@ -403,6 +409,24 @@ export default function GeneratePage() {
                 max={30}
                 className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white"
               />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-zinc-500">이후 게시물만 (선택)</label>
+              <input
+                type="date"
+                value={newerThan}
+                onChange={(e) => setNewerThan(e.target.value)}
+                className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white"
+              />
+              {newerThan && (
+                <button
+                  onClick={() => setNewerThan("")}
+                  className="text-xs text-zinc-500 hover:text-white"
+                  type="button"
+                >
+                  Clear
+                </button>
+              )}
             </div>
             <button
               onClick={handleScrape}

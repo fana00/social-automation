@@ -124,11 +124,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Auto-determine date filter from IG Sources tab (last scraped)
-    let effectiveNewerThan = newerThan;
-    if (!effectiveNewerThan && igSource?.source.lastScraped) {
-      effectiveNewerThan = igSource.source.lastScraped.split("T")[0];
-    }
+    // Date filter: only apply when explicitly provided by the user.
+    // No auto-filter from lastScraped — user has full control.
+    const effectiveNewerThan = newerThan || undefined;
 
     // Single Apify scrape (regardless of how many personas are linked)
     const posts = await scrapeInstagramProfile(
@@ -142,15 +140,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ posts: [], newCount: 0 });
     }
 
-    // Upload media to Cloudinary ONCE per post (shared folder).
-    // Failed uploads are skipped entirely.
+    // Pre-fetch existing scraped posts for ALL target personas, so we can dedup
+    // BEFORE uploading to Cloudinary (avoids wasted bandwidth on duplicates).
+    const existingByPersona = new Map<string, Set<string>>();
+    for (const targetPersona of targetPersonas) {
+      const existingPosts = await getScrapedPosts(targetPersona);
+      existingByPersona.set(
+        targetPersona,
+        new Set(existingPosts.map((p) => p.caption.substring(0, 100)))
+      );
+    }
+
+    // A post is "new" if it's missing from at least one target persona's history.
+    // (If all target personas already have it, no need to upload.)
+    const newPosts = posts.filter((p) => {
+      const cap = p.caption.substring(0, 100);
+      return targetPersonas.some(
+        (persona) => !existingByPersona.get(persona)!.has(cap)
+      );
+    });
+
+    const dedupedCount = posts.length - newPosts.length;
+
+    // Upload only the new posts to Cloudinary
     const uploadedPosts: {
       post: ScrapedPost;
       thumbnailUrl: string;
       mediaUrls: string[];
     }[] = [];
     let uploadFailures = 0;
-    for (const post of posts) {
+    for (const post of newPosts) {
       const uploaded = await uploadPostMedia(post);
       if (!uploaded) {
         uploadFailures++;
@@ -159,16 +178,12 @@ export async function POST(req: NextRequest) {
       uploadedPosts.push({ post, ...uploaded });
     }
 
-    // Fan out to each linked persona: dedup per-persona, append rows
+    // Fan out to each linked persona: per-persona dedup (some personas may already have a post)
     let totalNewCount = 0;
-    let totalSkippedCount = 0;
     const requestPersonaEntries: typeof uploadedPosts = [];
 
     for (const targetPersona of targetPersonas) {
-      const existingPosts = await getScrapedPosts(targetPersona);
-      const existingCaptions = new Set(
-        existingPosts.map((p) => p.caption.substring(0, 100))
-      );
+      const existingCaptions = existingByPersona.get(targetPersona)!;
 
       const newForPersona = uploadedPosts.filter(
         (u) => !existingCaptions.has(u.post.caption.substring(0, 100))
@@ -190,7 +205,6 @@ export async function POST(req: NextRequest) {
 
       await appendScrapedPosts(entries);
       totalNewCount += newForPersona.length;
-      totalSkippedCount += uploadedPosts.length - newForPersona.length;
 
       // Track entries for the persona that initiated the request (for response)
       if (targetPersona === personaId) {
@@ -203,6 +217,7 @@ export async function POST(req: NextRequest) {
         `[scrape] Skipped ${uploadFailures} posts due to media upload failures`
       );
     }
+    const totalSkippedCount = dedupedCount + uploadFailures;
 
     // Update Last Scraped on the IG Sources row (or create if missing)
     if (igSource) {
