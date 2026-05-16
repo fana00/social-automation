@@ -1,4 +1,11 @@
+import { countHashtags, limitHashtags } from "@/lib/blotato";
+
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+// Instagram (via Blotato) rejects posts with more than 5 hashtags. We enforce
+// this across caption+hashtags combined since Grok sometimes drops tags into
+// the caption body in addition to the hashtags field.
+const MAX_HASHTAGS_PER_POST = 5;
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -7,7 +14,7 @@ interface ChatMessage {
 
 async function chat(
   messages: ChatMessage[],
-  model = "x-ai/grok-4-fast"
+  model = "x-ai/grok-4.3"
 ): Promise<string> {
   const res = await fetch(OPENROUTER_API_URL, {
     method: "POST",
@@ -324,7 +331,12 @@ Respond in this exact JSON format:
 
   try {
     const cleaned = response.replace(/```json\n?|\n?```/g, "").trim();
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned) as { caption: string; hashtags: string };
+    const caption = parsed.caption || "";
+    const captionTagCount = countHashtags(caption);
+    const remaining = Math.max(0, MAX_HASHTAGS_PER_POST - captionTagCount);
+    const hashtags = limitHashtags(parsed.hashtags || "", remaining);
+    return { caption, hashtags };
   } catch {
     return { caption: response.slice(0, 200), hashtags: "" };
   }

@@ -1,5 +1,30 @@
 const BLOTATO_API_BASE = "https://backend.blotato.com/v2";
 
+const PLATFORM_HASHTAG_LIMITS: Record<string, number> = {
+  instagram: 5,
+};
+
+export function countHashtags(text: string): number {
+  return (text.match(/#[\p{L}\p{N}_]+/gu) || []).length;
+}
+
+export function limitHashtags(text: string, max: number): string {
+  if (max < 0) return text.replace(/#[\p{L}\p{N}_]+/gu, "");
+  let kept = 0;
+  const trimmed = text.replace(/#[\p{L}\p{N}_]+/gu, (match) => {
+    if (kept < max) {
+      kept++;
+      return match;
+    }
+    return "";
+  });
+  return trimmed
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/ {2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
 function getHeaders() {
   return {
     "Content-Type": "application/json",
@@ -48,11 +73,17 @@ interface SchedulePostOptions {
 export async function schedulePost(
   options: SchedulePostOptions
 ): Promise<string> {
+  const platformLimit = PLATFORM_HASHTAG_LIMITS[options.platform.toLowerCase()];
+  const safeText =
+    platformLimit !== undefined
+      ? limitHashtags(options.text, platformLimit)
+      : options.text;
+
   const body: Record<string, unknown> = {
     post: {
       accountId: options.accountId,
       content: {
-        text: options.text,
+        text: safeText,
         mediaUrls: options.mediaUrls,
         platform: options.platform,
       },
