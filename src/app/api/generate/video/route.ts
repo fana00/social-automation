@@ -22,11 +22,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // If user pasted an IG reel/post URL, extract the actual video file URL via Apify
-    if (
-      scrapedVideoUrl.includes("instagram.com/reel/") ||
-      scrapedVideoUrl.includes("instagram.com/p/")
-    ) {
+    // If user pasted an IG reel/post URL, extract the actual video file URL via Apify.
+    // Instagram serves reels under both /reel/ and /reels/, plus /p/ and /tv/ for posts.
+    if (/instagram\.com\/(reel|reels|p|tv)\//.test(scrapedVideoUrl)) {
       try {
         const postData = await scrapeInstagramPost(scrapedVideoUrl);
         scrapedVideoUrl = postData.videoUrl;
